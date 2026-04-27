@@ -1,0 +1,76 @@
+Step 1 — Turn on your robot
+
+Power on mybot002437
+Wait until the LED screen on top is working
+On your computer, verify it's discoverable:
+
+bashdts fleet discover
+Wait until you see mybot002437 appear in the list.
+
+Step 2 — Go to your repo folder
+On your computer, open a terminal and navigate to your Duckiebot repo:
+bashcd ~/path/to/your/repo
+If you're not sure where it is:
+bashfind ~ -name "duckietown*" -type d
+
+Step 3 — Update your Python file
+Open target_follower.py in your editor and paste the latest code. Make sure the robot name is mybot002437 in both lines:
+pythonself.cmd_vel_pub = rospy.Publisher('/mybot002437/car_cmd_switch_node/cmd', ...)
+rospy.Subscriber('/mybot002437/apriltag_detector_node/detections', ...)
+
+Step 4 — Push to GitHub
+bashgit add -A
+git commit -m "Add seek and track target follower"
+git push
+
+Step 5 — Start local container and create the package
+bashdts devel run -M -X --cmd bash
+Inside the container:
+bash# Navigate to packages folder
+cd /code/catkin_ws/src/<your_repo_name>/packages
+
+# Create the package (skip if already done)
+catkin_create_pkg target_follower std_msgs rospy roscpp duckietown_msgs
+
+# Create launch folder (skip if already done)
+cd target_follower
+mkdir launch
+Set permissions and build:
+bashchmod +x /code/catkin_ws/src/<your_repo_name>/packages/target_follower/src/target_follower.py
+chmod -R a+rw /code/catkin_ws/src/<your_repo_name>/packages/target_follower
+
+catkin build
+source /code/catkin_ws/devel/setup.bash
+exit
+
+Step 6 — Build on the robot
+This deploys your code to mybot002437:
+bashdts devel build -H mybot002437.local --pull
+Wait for it to fully finish — this takes a few minutes.
+
+Step 7 — Open Terminal 1 (AprilTag detector)
+bashdts devel run -H mybot002437.local -s -M --cmd bash
+# password: quackquack
+roslaunch duckietown_demos apriltag_detector.launch
+Leave this running, don't close it.
+
+Step 8 — Open Terminal 2 (Your node)
+Open a new terminal on your computer:
+bashdts devel run -H mybot002437.local attach
+cd /code/catkin_ws/src/<your_repo_name>/packages/target_follower/launch
+roslaunch target_follower.launch
+
+Step 9 — Test it!
+You should now see logs in Terminal 2:
+What you doWhat you see in terminalWhat robot doesNothing in front of camera[SEEKING] No tag detected...Spins in placeHold stop sign in frontTag found — switching to TRACKINGStops spinning, faces tagMove sign left[TRACKING] turning leftRotates leftMove sign right[TRACKING] turning rightRotates rightRemove signTag lost — switching to SEEKINGSpins again
+
+Step 10 — Tune your values
+Once it's running, if behaviour isn't right edit directly on the robot (fastest way):
+bash# In a new terminal
+nano /code/catkin_ws/src/<your_repo_name>/packages/target_follower/src/target_follower.py
+Change values, save with CTRL+O → Enter → CTRL+X, then restart Terminal 2 with the roslaunch command.
+
+To stop everything
+
+CTRL+C in Terminal 2 first — robot will stop cleanly
+CTRL+C in Terminal 1 after
