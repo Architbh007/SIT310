@@ -10,19 +10,18 @@ class Target_Follower:
         rospy.init_node('target_follower_node', anonymous=True)
         rospy.on_shutdown(self.clean_shutdown)
 
-        # ---- REPLACE "akandb" WITH YOUR ROBOT'S NAME ----
-        self.cmd_vel_pub = rospy.Publisher('/mybot002437/car_cmd_switch_node/cmd', Twist2DStamped, queue_size=1)
-        rospy.Subscriber('/mybot002437/apriltag_detector_node/detections', AprilTagDetectionArray, self.tag_callback, queue_size=1)
-        # --------------------------------------------------
+       
+        self.cmd_vel_pub = rospy.Publisher('/mybota002437/car_cmd_switch_node/cmd', Twist2DStamped, queue_size=1)
+        rospy.Subscriber('/mybota002437/apriltag_detector_node/detections', AprilTagDetectionArray, self.tag_callback, queue_size=1)
 
-        # --- States ---
+        #States
         self.STATE_SEEKING  = "SEEKING"
         self.STATE_TRACKING = "TRACKING"
         self.state          = self.STATE_SEEKING
-        self.last_seen_x    = None  # remembers where tag was last seen
+        self.last_seen_x    = None  
 
         # --- Tunable parameters ---
-        self.SEEK_OMEGA    = 0.8   # Slower seeking so it doesn't overshoot
+        self.SEEK_OMEGA    = 1.4   # Slower seeking so it doesn't overshoot
         self.OMEGA_GAIN    = 2.0   # P-gain for tracking rotation
         self.OMEGA_MIN     = 0.3   # Min omega to overcome friction
         self.OMEGA_MAX     = 4.0   # Max omega cap
@@ -62,13 +61,13 @@ class Target_Follower:
         else:
             seek_direction = 1       # no memory yet, default spin left
 
-        rospy.loginfo("[SEEKING] No tag detected — rotating to find object...")
+        rospy.loginfo("[SEEKING] No tag detected - rotating to find object...")
         self.publish_velocity(v=0.0, omega=self.SEEK_OMEGA * seek_direction)
 
     def track(self, x):
         if abs(x) < self.CENTER_THRESH:
             omega = 0.0
-            rospy.loginfo("[TRACKING] Tag centred — holding position.")
+            rospy.loginfo("[TRACKING] Tag centred - holding position.")
         else:
             omega = -self.OMEGA_GAIN * x
 
@@ -87,12 +86,12 @@ class Target_Follower:
     def move_robot(self, detections):
         if len(detections) == 0:
             if self.state != self.STATE_SEEKING:
-                rospy.loginfo("Tag lost — switching to SEEKING state.")
+                rospy.loginfo("Tag lost - switching to SEEKING state.")
                 self.state = self.STATE_SEEKING
             self.seek()
         else:
             if self.state != self.STATE_TRACKING:
-                rospy.loginfo("Tag found — switching to TRACKING state.")
+                rospy.loginfo("Tag found - switching to TRACKING state.")
                 self.state = self.STATE_TRACKING
             x = detections[0].transform.translation.x
             self.last_seen_x = x  # remember where we last saw the tag

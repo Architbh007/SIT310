@@ -10,17 +10,15 @@ class Target_Follower:
         rospy.init_node('target_follower_node', anonymous=True)
         rospy.on_shutdown(self.clean_shutdown)
 
-        # ---- ROBOT NAME ----
         self.cmd_vel_pub = rospy.Publisher('/mybot002437/car_cmd_switch_node/cmd', Twist2DStamped, queue_size=1)
         rospy.Subscriber('/mybot002437/apriltag_detector_node/detections', AprilTagDetectionArray, self.tag_callback, queue_size=1)
-        # --------------------
 
-        # --- Rotation PID gains ---
+        #Rotation PID gains
         self.KP_omega = 2.0
         self.KI_omega = 0.0
         self.KD_omega = 0.1
 
-        # --- Linear PID gains ---
+        #Linear PID gains
         self.KP_v     = 0.5
         self.KI_v     = 0.0
         self.KD_v     = 0.1
@@ -33,7 +31,7 @@ class Target_Follower:
         self.CENTER_THRESH  = 0.05
         self.DIST_THRESH    = 0.05
 
-        # --- PID state variables ---
+        # PID state variables
         self.prev_error_omega = 0.0
         self.integral_omega   = 0.0
         self.prev_error_v     = 0.0
@@ -73,9 +71,9 @@ class Target_Follower:
 
     def move_robot(self, detections):
 
-        # No tag — stay still and reset PID
+        # No tag: stay still and reset PID
         if len(detections) == 0:
-            rospy.loginfo("[WAITING] No tag detected — staying still.")
+            rospy.loginfo("[WAITING] No tag detected - staying still.")
             self.stop_robot()
             self.prev_error_omega = 0.0
             self.integral_omega   = 0.0
@@ -84,7 +82,7 @@ class Target_Follower:
             self.prev_time        = rospy.Time.now()
             return
 
-        # Time delta for PID
+        # Time delta for PID calculations
         current_time = rospy.Time.now()
         dt = (current_time - self.prev_time).to_sec()
         self.prev_time = current_time
@@ -97,7 +95,7 @@ class Target_Follower:
 
         rospy.loginfo("x=%.3f  z=%.3f", x, z)
 
-        # --- Rotation PID ---
+        #Rotation PID to align with tag
         if abs(x) < self.CENTER_THRESH:
             omega = 0.0
             self.prev_error_omega = 0.0
@@ -120,7 +118,7 @@ class Target_Follower:
             direction = "right" if omega < 0 else "left"
             rospy.loginfo("[ROTATION] x=%.3f → turning %s (omega=%.3f)", x, direction, omega)
 
-        # --- Linear PID ---
+        #Linear PID to maintain distance from tag
         if abs(z - self.GOAL_DISTANCE) < self.DIST_THRESH:
             v = 0.0
             self.prev_error_v = 0.0
