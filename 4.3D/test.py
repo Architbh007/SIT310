@@ -54,10 +54,14 @@ class ClosedLoopSquare:
         )
 
     def tof_callback(self, msg):
-        self.tof_distance = msg.range
+        # Filter out invalid readings (negative, too close, or beyond max range)
+        if msg.range > 0.05 and msg.range < msg.max_range:
+            self.tof_distance = msg.range
+        else:
+            self.tof_distance = float('inf')
 
     def obstacle_detected(self):
-        return self.tof_distance < self.STOP_THRESHOLD
+        return 0.05 < self.tof_distance < self.STOP_THRESHOLD
 
     def left_encoder_callback(self, msg):
         self.left_ticks = msg.data
@@ -103,6 +107,7 @@ class ClosedLoopSquare:
                 ticks_done = self.avg_ticks()
                 self.stop_robot()
                 self.wait_for_clear()
+                # Resume from where we left off
                 self.reset_ticks()
                 tick_target = tick_target - int(ticks_done)
 
