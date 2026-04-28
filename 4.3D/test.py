@@ -54,7 +54,6 @@ class ClosedLoopSquare:
         )
 
     def tof_callback(self, msg):
-        # Filter out invalid readings (negative, too close, or beyond max range)
         if msg.range > 0.05 and msg.range < msg.max_range:
             self.tof_distance = msg.range
         else:
@@ -98,24 +97,30 @@ class ClosedLoopSquare:
         rospy.sleep(0.5)
 
     def move_straight(self, distance, speed):
-        tick_target = int((distance / 1.0) * self.ticks_per_metre)
-        self.reset_ticks()
-        rospy.loginfo("Moving straight %sm (%d ticks)...", distance, tick_target)
+        ticks_remaining = int((distance / 1.0) * self.ticks_per_metre)
+        rospy.loginfo("Moving straight %sm (%d ticks)...", distance, ticks_remaining)
 
-        while not rospy.is_shutdown() and self.avg_ticks() < tick_target:
-            if self.obstacle_detected():
-                ticks_done = self.avg_ticks()
-                self.stop_robot()
-                self.wait_for_clear()
-                # Resume from where we left off
-                self.reset_ticks()
-                tick_target = tick_target - int(ticks_done)
+        while not rospy.is_shutdown() and ticks_remaining > 0:
+            self.reset_ticks()
+            rospy.loginfo("Starting segment, ticks remaining: %d", ticks_remaining)
 
-            self.msg.header.stamp = rospy.Time.now()
-            self.msg.v = speed if distance > 0 else -speed
-            self.msg.omega = -0.010
-            self.pub.publish(self.msg)
-            self.rate.sleep()
+            # Drive this segment until ticks done or obstacle hit
+            while not rospy.is_shutdown() and self.avg_ticks() < ticks_remaining:
+                if self.obstacle_detected():
+                    # Record progress, stop, wait, then break to outer loop
+                    ticks_remaining -= int(self.avg_ticks())
+                    rospy.loginfo("Obstacle hit! Ticks remaining: %d", ticks_remaining)
+                    self.stop_robot()
+                    self.wait_for_clear()
+                    break
+                self.msg.header.stamp = rospy.Time.now()
+                self.msg.v = speed if distance > 0 else -speed
+                self.msg.omega = -0.010
+                self.pub.publish(self.msg)
+                self.rate.sleep()
+            else:
+                # Inner while finished naturally (no obstacle) — we're done
+                ticks_remaining = 0
 
         self.stop_robot()
         rospy.sleep(1)
