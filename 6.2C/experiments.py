@@ -69,22 +69,23 @@ for t in hough_thresholds:
 
 
 # ── EXPERIMENT 3: HSV vs RGB Colour Space ────────────────────────────────────
+# Using full image instead of cropped for better yellow visibility
 print("\n--- HSV vs RGB Colour Space Experiments ---")
 
-# HSV yellow filter
-hsv = cv2.cvtColor(cropped, cv2.COLOR_BGR2HSV)
-lower_yellow_hsv = np.array([20,  80,  80], dtype=np.uint8)
-upper_yellow_hsv = np.array([35, 255, 255], dtype=np.uint8)
-mask_hsv = cv2.inRange(hsv, lower_yellow_hsv, upper_yellow_hsv)
-yellow_hsv = cv2.bitwise_and(cropped, cropped, mask=mask_hsv)
+# HSV yellow filter - loosened range to catch more yellow
+hsv_full = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+lower_yellow_hsv = np.array([15,  50,  50], dtype=np.uint8)
+upper_yellow_hsv = np.array([40, 255, 255], dtype=np.uint8)
+mask_hsv = cv2.inRange(hsv_full, lower_yellow_hsv, upper_yellow_hsv)
+yellow_hsv = cv2.bitwise_and(img, img, mask=mask_hsv)
 cv2.imwrite("/data/yellow_hsv.jpg", yellow_hsv)
 print("Saved: yellow_hsv.jpg")
 
-# RGB yellow filter
+# RGB yellow filter - high red, high green, low blue
 lower_yellow_rgb = np.array([100, 100,  0], dtype=np.uint8)
 upper_yellow_rgb = np.array([255, 255, 80], dtype=np.uint8)
-mask_rgb = cv2.inRange(cropped, lower_yellow_rgb, upper_yellow_rgb)
-yellow_rgb = cv2.bitwise_and(cropped, cropped, mask=mask_rgb)
+mask_rgb = cv2.inRange(img, lower_yellow_rgb, upper_yellow_rgb)
+yellow_rgb = cv2.bitwise_and(img, img, mask=mask_rgb)
 cv2.imwrite("/data/yellow_rgb.jpg", yellow_rgb)
 print("Saved: yellow_rgb.jpg")
 
@@ -102,14 +103,14 @@ bright_img = cv2.convertScaleAbs(cropped, alpha=1.6, beta=30)
 cv2.imwrite("/data/lighting_bright.jpg", bright_img)
 print("Saved: lighting_bright.jpg")
 
-# Run lane detection on both
+# Run same lane detection on both
 def detect_lanes(image, label):
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     lower_white = np.array([0,   0,  180], dtype=np.uint8)
     upper_white = np.array([180, 60, 255], dtype=np.uint8)
     mask_white = cv2.inRange(hsv, lower_white, upper_white)
-    lower_yellow = np.array([20,  80,  80], dtype=np.uint8)
-    upper_yellow = np.array([35, 255, 255], dtype=np.uint8)
+    lower_yellow = np.array([15,  50,  50], dtype=np.uint8)
+    upper_yellow = np.array([40, 255, 255], dtype=np.uint8)
     mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, 50, 150)
