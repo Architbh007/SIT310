@@ -1,164 +1,238 @@
 #!/usr/bin/env python3
 
 import rospy
-from duckietown_msgs.msg import Twist2DStamped, FSMState, AprilTagDetectionArray
+from std_msgs.msg import String
+from sensor_msgs.msg import Range
+from duckietown_msgs.msg import Twist2DStamped, WheelEncoderStamped
+from duckietown_msgs.msg import AprilTagDetectionArray
 
 
-class Autopilot:
+class AutopilotNode:
     def __init__(self):
         rospy.init_node("autopilot_node", anonymous=True)
 
-        self.veh = "mybota002437"
+        self.veh = rospy.get_param("~veh", "mybota002437")
 
-        self.STOP_ID = 26
+        # Sign IDs
+        self.STOP_ID = 24
         self.RIGHT_ID = 9
         self.LEFT_ID = 11
 
-        self.busy = False
-        self.ignore_tags = False
+        # Distance trigger
+        self.TRIGGER_DISTANCE = 0.20  # 20 cm
 
-        rospy.on_shutdown(self.clean_shutdown)
+        # Tick calibration
+        self.TURN_90_TICKS = 48
 
-        self.cmd_vel_pub = rospy.Publisher(
+        # State variables
+        self.pending_action = None
+        self.tof_distance = None
+        self.stop_tag_visible = False
+        self.action_running = False
+
+        # Encoder values
+        self.left_ticks = 0
+        self.right_ticks = 0
+
+        # Publishers
+        self.cmd_pub = rospy.Publisher(
             f"/{self.veh}/car_cmd_switch_node/cmd",
             Twist2DStamped,
             queue_size=1
         )
 
-        self.state_pub = rospy.Publisher(
+        self.fsm_pub = rospy.Publisher(
             f"/{self.veh}/fsm_node/mode",
-            FSMState,
+            String,
             queue_size=1
         )
 
+        # Subscribers
         rospy.Subscriber(
             f"/{self.veh}/apriltag_detector_node/detections",
             AprilTagDetectionArray,
-            self.tag_callback,
-            queue_size=1
+            self.tag_callback
         )
 
-        rospy.loginfo("Autopilot started. Waiting for lane/signs...")
+        rospy.Subscriber(
+            f"/{self.veh}/front_center_tof_driver_node/range",
+            Range,
+            self.tof_callback
+        )
 
-        rospy.sleep(3.0)
+        rospy.Subscriber(
+            f"/{self.veh}/left_wheel_encoder_node/tick",
+            WheelEncoderStamped,
+            self.left_encoder_callback
+        )
+
+        rospy.Subscriber(
+            f"/{self.veh}/right_wheel_encoder_node/tick",
+            WheelEncoderStamped,
+            self.right_encoder_callback
+        )
+
+        rospy.sleep(1.0)
+
+        # Start in lane following
         self.set_state("LANE_FOLLOWING")
-        rospy.loginfo("Lane following auto-started.")
-
-        rospy.spin()
-
-    def clean_shutdown(self):
-        rospy.loginfo("Shutting down. Stopping robot.")
-        self.stop_robot(1.0)
+        rospy.loginfo("Autopilot started in LANE_FOLLOWING mode")
 
     def set_state(self, state):
-        rospy.loginfo(f"Switching FSM to {state}")
+        msg = String()
+        msg.data = state
+        self.fsm_pub.publish(msg)
+        rospy.loginfo(f"FSM set to: {state}")
 
-        msg = FSMState()
-        msg.state = state
-        rate = rospy.Rate(10)
-
-        for _ in range(10):
-            msg.header.stamp = rospy.Time.now()
-            self.state_pub.publish(msg)
-            rate.sleep()
-
-    def publish_cmd(self, v, omega, duration):
+    def publish_cmd(self, v, omega):
         msg = Twist2DStamped()
-        rate = rospy.Rate(10)
-        start = rospy.Time.now()
+        msg.header.stamp = rospy.Time.now()
+        msg.v = v
+        msg.omega = omega
+        self.cmd_pub.publish(msg)
 
-        rospy.loginfo(f"Command: v={v}, omega={omega}, duration={duration}")
+    def stop_robot(self):
+        self.publish_cmd(0.0, 0.0)
+        rospy.sleep(0.3)
 
-        while (rospy.Time.now() - start).to_sec() < duration and not rospy.is_shutdown():
-            msg.header.stamp = rospy.Time.now()
-            msg.v = v
-            msg.omega = omega
-            self.cmd_vel_pub.publish(msg)
-            rate.sleep()
+    def left_encoder_callback(self, msg):
+        self.left_ticks = msg.data
 
-    def stop_robot(self, duration=0.5):
-        self.publish_cmd(0.0, 0.0, duration)
+    def right_encoder_callback(self, msg):
+        self.right_ticks = msg.data
 
-    def start_cooldown(self, seconds):
-        self.ignore_tags = True
-        rospy.Timer(rospy.Duration(seconds), self.end_cooldown, oneshot=True)
+    def tof_callback(self, msg):
+        self.tof_distance = msg.range
 
-    def end_cooldown(self, event):
-        self.ignore_tags = False
-        rospy.loginfo("Cooldown finished. Watching for tags again.")
+        if self.action_running:
+            return
+
+        if self.pending_action is None:
+            return
+
+        if self.tof_distance <= self.TRIGGER_DISTANCE:
+            rospy.loginfo(f"ToF triggered at {self.tof_distance:.2f} m")
+            self.execute_pending_action()
 
     def tag_callback(self, msg):
-        if self.busy or self.ignore_tags:
+        detected_ids = []
+
+        for detection in msg.detections:
+            tag_id = detection.tag_id
+            detected_ids.append(tag_id)
+
+        self.stop_tag_visible = self.STOP_ID in detected_ids
+
+        if self.action_running:
             return
 
-        if len(msg.detections) == 0:
+        if self.pending_action is not None:
             return
 
-        detection = msg.detections[0]
-        tag_id = detection.tag_id
+        if self.STOP_ID in detected_ids:
+            self.pending_action = "STOP"
+            rospy.loginfo("STOP sign detected. Pending action stored.")
 
-        if isinstance(tag_id, list):
-            tag_id = tag_id[0]
+        elif self.LEFT_ID in detected_ids:
+            self.pending_action = "LEFT"
+            rospy.loginfo("LEFT sign detected. Pending action stored.")
 
-        rospy.loginfo(f"TAG SEEN: ID={tag_id}")
+        elif self.RIGHT_ID in detected_ids:
+            self.pending_action = "RIGHT"
+            rospy.loginfo("RIGHT sign detected. Pending action stored.")
 
-        if tag_id == self.STOP_ID:
-            self.do_stop()
+    def execute_pending_action(self):
+        self.action_running = True
 
-        elif tag_id == self.RIGHT_ID:
-            self.do_right_turn()
+        action = self.pending_action
+        self.pending_action = None
 
-        elif tag_id == self.LEFT_ID:
-            self.do_left_turn()
+        rospy.loginfo(f"Executing action: {action}")
 
-    def do_stop(self):
-        self.busy = True
-        rospy.loginfo("STOP SIGN detected. Stopping.")
+        if action == "STOP":
+            self.handle_stop()
 
+        elif action == "LEFT":
+            self.turn_left_90_ticks()
+
+        elif action == "RIGHT":
+            self.turn_right_90_ticks()
+
+        self.action_running = False
+
+    def handle_stop(self):
         self.set_state("NORMAL_JOYSTICK_CONTROL")
-        self.stop_robot(2.5)
+        self.stop_robot()
 
+        rospy.loginfo("STOP action complete. Waiting for STOP tag to disappear...")
+
+        rate = rospy.Rate(10)
+
+        while not rospy.is_shutdown() and self.stop_tag_visible:
+            self.stop_robot()
+            rate.sleep()
+
+        rospy.loginfo("STOP tag disappeared. Resuming lane following.")
         self.set_state("LANE_FOLLOWING")
-        self.start_cooldown(4.0)
 
-        self.busy = False
-        rospy.loginfo("STOP complete. Lane following resumed.")
-
-    def do_left_turn(self):
-        self.busy = True
-        rospy.loginfo("LEFT SIGN detected. Stopping then turning left.")
-
+    def turn_left_90_ticks(self):
         self.set_state("NORMAL_JOYSTICK_CONTROL")
-        self.stop_robot(0.7)
+        self.stop_robot()
 
-        self.publish_cmd(0.0, 3.0, 1.4)
+        start_left = self.left_ticks
+        start_right = self.right_ticks
 
-        self.stop_robot(0.4)
+        rate = rospy.Rate(20)
+
+        rospy.loginfo("Starting LEFT 90-degree tick turn")
+
+        while not rospy.is_shutdown():
+            left_delta = abs(self.left_ticks - start_left)
+            right_delta = abs(self.right_ticks - start_right)
+
+            avg_ticks = (left_delta + right_delta) / 2.0
+
+            if avg_ticks >= self.TURN_90_TICKS:
+                break
+
+            self.publish_cmd(0.0, 3.0)
+            rate.sleep()
+
+        self.stop_robot()
+        rospy.loginfo("LEFT turn complete")
         self.set_state("LANE_FOLLOWING")
-        self.start_cooldown(4.0)
 
-        self.busy = False
-        rospy.loginfo("LEFT TURN complete. Lane following resumed.")
-
-    def do_right_turn(self):
-        self.busy = True
-        rospy.loginfo("RIGHT SIGN detected. Stopping then turning right.")
-
+    def turn_right_90_ticks(self):
         self.set_state("NORMAL_JOYSTICK_CONTROL")
-        self.stop_robot(0.7)
+        self.stop_robot()
 
-        self.publish_cmd(0.0, -3.0, 1.4)
+        start_left = self.left_ticks
+        start_right = self.right_ticks
 
-        self.stop_robot(0.4)
+        rate = rospy.Rate(20)
+
+        rospy.loginfo("Starting RIGHT 90-degree tick turn")
+
+        while not rospy.is_shutdown():
+            left_delta = abs(self.left_ticks - start_left)
+            right_delta = abs(self.right_ticks - start_right)
+
+            avg_ticks = (left_delta + right_delta) / 2.0
+
+            if avg_ticks >= self.TURN_90_TICKS:
+                break
+
+            self.publish_cmd(0.0, -3.0)
+            rate.sleep()
+
+        self.stop_robot()
+        rospy.loginfo("RIGHT turn complete")
         self.set_state("LANE_FOLLOWING")
-        self.start_cooldown(4.0)
 
-        self.busy = False
-        rospy.loginfo("RIGHT TURN complete. Lane following resumed.")
+    def run(self):
+        rospy.spin()
 
 
 if __name__ == "__main__":
-    try:
-        Autopilot()
-    except rospy.ROSInterruptException:
-        pass
+    node = AutopilotNode()
+    node.run()
