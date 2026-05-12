@@ -13,16 +13,15 @@ class AutopilotNode:
 
         self.veh = rospy.get_param("~veh", "mybota002437")
 
-        # Correct sign IDs
         self.STOP_ID = 26
         self.RIGHT_ID = 9
         self.LEFT_ID = 10
 
-        self.TRIGGER_DISTANCE = 0.20
+        self.TRIGGER_DISTANCE = 0.25
         self.TURN_90_TICKS = 48
 
         self.pending_action = None
-        self.tof_distance = None
+        self.tof_distance = 999.0
         self.stop_tag_visible = False
         self.action_running = False
 
@@ -80,31 +79,22 @@ class AutopilotNode:
         msg.omega = omega
         self.cmd_pub.publish(msg)
 
-    def stop_robot(self):
-        rate = rospy.Rate(20)
+    def force_stop_for(self, seconds):
+        rate = rospy.Rate(30)
+        end_time = rospy.Time.now() + rospy.Duration(seconds)
 
-        for _ in range(20):
+        while not rospy.is_shutdown() and rospy.Time.now() < end_time:
             self.publish_cmd(0.0, 0.0)
             rate.sleep()
+
+    def stop_robot(self):
+        self.force_stop_for(1.0)
 
     def left_encoder_callback(self, msg):
         self.left_ticks = msg.data
 
     def right_encoder_callback(self, msg):
         self.right_ticks = msg.data
-
-    def tof_callback(self, msg):
-        self.tof_distance = msg.range
-
-        if self.action_running:
-            return
-
-        if self.pending_action is None:
-            return
-
-        if self.tof_distance <= self.TRIGGER_DISTANCE:
-            rospy.loginfo(f"ToF triggered at {self.tof_distance:.2f} m")
-            self.execute_pending_action()
 
     def tag_callback(self, msg):
         detected_ids = []
@@ -118,20 +108,35 @@ class AutopilotNode:
         if self.action_running:
             return
 
-        if self.pending_action is not None:
+        # Only STORE action here. Do NOT execute here.
+        if self.pending_action is None:
+            if self.STOP_ID in detected_ids:
+                self.pending_action = "STOP"
+                rospy.loginfo("STOP detected. Stored pending action. Waiting for ToF <= 0.25m.")
+
+            elif self.LEFT_ID in detected_ids:
+                self.pending_action = "LEFT"
+                rospy.loginfo("LEFT detected. Stored pending action. Waiting for ToF <= 0.25m.")
+
+            elif self.RIGHT_ID in detected_ids:
+                self.pending_action = "RIGHT"
+                rospy.loginfo("RIGHT detected. Stored pending action. Waiting for ToF <= 0.25m.")
+
+    def tof_callback(self, msg):
+        self.tof_distance = msg.range
+
+        if self.action_running:
             return
 
-        if self.STOP_ID in detected_ids:
-            self.pending_action = "STOP"
-            rospy.loginfo("STOP sign detected. Pending action stored.")
+        if self.pending_action is None:
+            return
 
-        elif self.LEFT_ID in detected_ids:
-            self.pending_action = "LEFT"
-            rospy.loginfo("LEFT sign detected. Pending action stored.")
-
-        elif self.RIGHT_ID in detected_ids:
-            self.pending_action = "RIGHT"
-            rospy.loginfo("RIGHT sign detected. Pending action stored.")
+        # Only execute when close enough
+        if self.tof_distance <= self.TRIGGER_DISTANCE:
+            rospy.loginfo(
+                f"ToF distance {self.tof_distance:.2f}m <= {self.TRIGGER_DISTANCE:.2f}m. Executing action."
+            )
+            self.execute_pending_action()
 
     def execute_pending_action(self):
         self.action_running = True
@@ -153,20 +158,26 @@ class AutopilotNode:
         self.action_running = False
 
     def handle_stop(self):
+        rospy.loginfo("STOP triggered at 0.25m. Taking manual control and stopping.")
+
         self.set_state("NORMAL_JOYSTICK_CONTROL")
         rospy.sleep(0.5)
 
-        self.stop_robot()
+        # Strong stop to cancel lane-follow movement
+        self.force_stop_for(2.0)
 
-        rospy.loginfo("STOP action complete. Waiting for STOP tag to disappear...")
+        rospy.loginfo("Robot stopped. Holding while STOP tag is visible.")
 
-        rate = rospy.Rate(10)
+        rate = rospy.Rate(20)
 
         while not rospy.is_shutdown() and self.stop_tag_visible:
-            self.stop_robot()
+            self.publish_cmd(0.0, 0.0)
             rate.sleep()
 
-        rospy.loginfo("STOP tag disappeared. You can resume lane following externally.")
+        # Extra stop after tag disappears
+        self.force_stop_for(1.0)
+
+        rospy.loginfo("STOP tag disappeared. Action complete. Resume lane following externally.")
 
     def turn_left_90_ticks(self):
         self.set_state("NORMAL_JOYSTICK_CONTROL")
@@ -184,10 +195,12 @@ class AutopilotNode:
         while not rospy.is_shutdown():
             left_delta = abs(self.left_ticks - start_left)
             right_delta = abs(self.right_ticks - start_right)
-
             avg_ticks = (left_delta + right_delta) / 2.0
 
-            rospy.loginfo_throttle(0.5, f"LEFT turning ticks: {avg_ticks}/{self.TURN_90_TICKS}")
+            rospy.loginfo_throttle(
+                0.5,
+                f"LEFT turning ticks: {avg_ticks}/{self.TURN_90_TICKS}"
+            )
 
             if avg_ticks >= self.TURN_90_TICKS:
                 break
@@ -196,7 +209,7 @@ class AutopilotNode:
             rate.sleep()
 
         self.stop_robot()
-        rospy.loginfo("LEFT turn complete. You can resume lane following externally.")
+        rospy.loginfo("LEFT turn complete. Resume lane following externally.")
 
     def turn_right_90_ticks(self):
         self.set_state("NORMAL_JOYSTICK_CONTROL")
@@ -214,10 +227,12 @@ class AutopilotNode:
         while not rospy.is_shutdown():
             left_delta = abs(self.left_ticks - start_left)
             right_delta = abs(self.right_ticks - start_right)
-
             avg_ticks = (left_delta + right_delta) / 2.0
 
-            rospy.loginfo_throttle(0.5, f"RIGHT turning ticks: {avg_ticks}/{self.TURN_90_TICKS}")
+            rospy.loginfo_throttle(
+                0.5,
+                f"RIGHT turning ticks: {avg_ticks}/{self.TURN_90_TICKS}"
+            )
 
             if avg_ticks >= self.TURN_90_TICKS:
                 break
@@ -226,7 +241,7 @@ class AutopilotNode:
             rate.sleep()
 
         self.stop_robot()
-        rospy.loginfo("RIGHT turn complete. You can resume lane following externally.")
+        rospy.loginfo("RIGHT turn complete. Resume lane following externally.")
 
     def run(self):
         rospy.spin()
